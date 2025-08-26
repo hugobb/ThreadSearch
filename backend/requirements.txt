@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+numpy
+faiss-cpu
+huggingface_hub
+torch           # CPU build by default
+sentence-transformers
+transformers    # fallback embedding path
+python-dotenv
+python-multipart
+einops
