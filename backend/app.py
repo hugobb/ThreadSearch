@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
+
+
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(

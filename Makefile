@@ -4,7 +4,7 @@
 setup:
 	python3 -m venv .venv
 	. .venv/bin/activate && pip install -r backend/requirements.txt
-	cd frontend && cp -n .env.example .env || true && npm i && npm run shadcn:setup
+	cd frontend && cp -n .env.example .env || true && npm i
 
 # Run both servers (use two terminals if your shell can't multiprocess)
 dev:
