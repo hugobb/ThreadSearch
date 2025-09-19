@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+import pickle
 from typing import Dict, List, Optional, TypedDict
 import json
 import uuid
@@ -33,7 +34,10 @@ class Store:
         self.meta = self.load_meta()
         self.entries_path = self.path / "entries.jsonl"
         self.index_path = self.path / "index.faiss"
+        self.graph_path = self.path / "graph.faiss"
         self.index: Optional[faiss.Index] = self._load_index()
+        # self.graph: Optional[faiss.Index] = self._load_graph()
+
 
     def load_meta(self) -> MetaData:
         meta_path = self.path / "meta.json"
@@ -279,6 +283,95 @@ class Store:
     def delete_all(self):
         import shutil
         shutil.rmtree(self.path)
+
+    # -----------------------------
+    # k-NN Graph
+    # -----------------------------
+    def _load_graph(self) -> Optional[faiss.Index]:
+        if self.graph_path.exists():
+            return faiss.read_index(str(self.graph_path))
+        return None
+
+    async def build_graph(self, k: int = 10, efConstruction: int = 200, M: int = 32, job: Job = None):
+        """
+        Build approximate k-NN graph from embeddings using HNSW.
+        """
+        if self.index is None or self.count == 0:
+            raise RuntimeError("No embeddings indexed yet")
+
+        dim = self.index.d
+        n = self.count
+
+        # Initialize HNSW index
+        print("Initialize HNSW index")
+        hnsw = faiss.IndexHNSWFlat(dim, M)
+        hnsw.hnsw.efConstruction = efConstruction
+
+        # Export vectors from store's FAISS index
+        print("Export vectors from FAISS index")
+        xb = np.empty((n, dim), dtype=np.float32)
+        self.index.reconstruct_n(0, n, xb)
+
+        if job:
+            job.total = n
+            job.processed = 0
+            job.log(f"Building k-NN graph with N={n}, M={M}, efC={efConstruction}")
+            await broadcast(job)
+
+        # Add vectors in chunks so we can track progress
+        print("Adding vectors")
+        batch_size = 4
+        for i in range(0, n, batch_size):
+            chunk = xb[i : i + batch_size]
+            hnsw.add(chunk)
+            if job:
+                job.processed = min(i + len(chunk), n)
+                job.progress = int(job.processed / job.total * 100)
+                job.log(f"Inserted {job.processed}/{n} vectors into graph")
+                await broadcast(job)
+
+        print("Write index")
+        faiss.write_index(hnsw, str(self.graph_path))
+        self.graph = hnsw
+
+        if job:
+            job.progress = 100
+            job.log("Graph build complete")
+            job.status = "done"
+            await broadcast(job)
+        """
+        Build a k-NN graph over all current embeddings and save it to disk.
+        Uses FAISS HNSW index.
+        """
+        if self.index is None or self.count == 0:
+            raise RuntimeError("No embeddings indexed yet, cannot build graph.")
+
+        # load embeddings again (we don’t store them in index)
+        entries = self._get_all()
+        texts = [e["text"] for e in entries]
+
+        model_id = self.meta["model"]
+        model = get_model(model_id)()
+        await asyncio.to_thread(model.load, CACHE_FOLDER)
+        embs = await asyncio.to_thread(model.embed, texts)
+        embs = l2norm(embs.astype(np.float32))
+
+        N, d = embs.shape
+        index = faiss.IndexHNSWFlat(d, 32)
+        index.hnsw.efConstruction = 200
+        index.add(embs)
+
+        D, I = index.search(embs, k + 1)  # include self
+
+        graph = {}
+        for i in range(N):
+            graph[i] = [(int(j), float(dist)) for dist, j in zip(D[i][1:], I[i][1:])]
+
+        with open(self.graph_path, "wb") as f:
+            pickle.dump(graph, f)
+
+        self._graph = graph
+        return graph
 
 
 def get_store(name: str):

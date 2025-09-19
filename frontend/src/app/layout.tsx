@@ -27,6 +27,8 @@ const navItems = [
   { href: "/stores", label: "Stores" },
   { href: "/jobs", label: "Jobs" },
   { href: "/search", label: "Search" },
+  { href: "/interpolate", label: "Interpolate" },
+  { href: "/graph-search", label: "Graph Search" }
 ];
 
 export default function RootLayout({
@@ -37,16 +39,16 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`min-h-screen flex bg-gray-50 text-gray-900 ${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`min-h-screen bg-gray-50 text-gray-900 ${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {/* Sidebar */}
-        <aside className="w-60 bg-white border-r shadow-sm flex flex-col">
+        {/* Sidebar (fixed) */}
+        <aside className="fixed top-0 left-0 h-screen w-60 bg-white border-r shadow-sm flex flex-col">
           <div className="px-4 py-6">
             <h1 className="text-xl font-bold">🔎 TinyFind</h1>
             <p className="text-xs text-muted-foreground">local embed search</p>
           </div>
           <Separator />
-          <nav className="flex-1 px-3 py-4 space-y-1">
+          <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
             {navItems.map((item) => (
               <Link
                 key={item.href}
@@ -65,7 +67,7 @@ export default function RootLayout({
         </aside>
 
         {/* Main content */}
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="ml-60 p-6 overflow-y-auto">{children}</main>
       </body>
     </html>
   );

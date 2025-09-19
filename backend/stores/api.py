@@ -2,9 +2,13 @@ import uuid
 from typing import List, Optional
 from fastapi import APIRouter, UploadFile
 from fastapi.params import Form
+import numpy as np
 from pydantic import BaseModel
 from pathlib import Path
+import networkx as nx
 
+
+from models.registry import get_model
 from config import STORES_DIR
 from jobs.core import Job, JOBS, QUEUE
 
@@ -39,6 +43,27 @@ class SearchReq(BaseModel):
     store: str
     query: str
     k: int = 5
+
+
+class InterpolateReq(BaseModel):
+    store: str
+    sentence_a: str
+    sentence_b: str
+    steps: int = 5  # number of points to interpolate
+    k: int = 1      # how many results per step
+
+class BuildGraphReq(BaseModel):
+    store: str
+    k: int = 10
+    efConstruction: int = 200
+    M: int = 32
+
+class GraphSearchReq(BaseModel):
+    store: str
+    start: str
+    end: str
+    k: int = 5
+
 
 
 # -----------------------------
@@ -124,3 +149,91 @@ def search(req: SearchReq):
     s = get_store(req.store)
     results = s.search(req.query, req.k)
     return {"results": results}
+
+
+@router.post("/interpolate")
+def interpolate(req: InterpolateReq):
+    s = get_store(req.store)
+    model_id = s.meta["model"]
+    model = get_model(model_id)()
+    model.load()
+
+    # encode both endpoints
+    v_a = model.embed([req.sentence_a]).astype(np.float32)[0]
+    v_b = model.embed([req.sentence_b]).astype(np.float32)[0]
+
+    results = []
+    for i in range(1, req.steps + 1):
+        t = i / (req.steps + 1)
+        v_interp = (1 - t) * v_a + t * v_b
+        v_interp = v_interp / np.linalg.norm(v_interp)  # normalize like search
+        sims, ids = s.index.search(np.array([v_interp]), min(req.k, s.count))
+        entries = s.get_all()
+        step_results = [
+            {
+                "id": entries[int(idx)]["id"],
+                "text": entries[int(idx)]["text"],
+                "score": float(sim),
+            }
+            for idx, sim in zip(ids[0], sims[0])
+        ]
+        results.append({"step": i, "results": step_results})
+    return {"interpolations": results}
+
+@router.post("/stores/build_graph")
+async def build_graph(req: BuildGraphReq):
+    from jobs.core import Job, JOBS, QUEUE
+
+    # Create background job
+    job = Job(store=req.store, filename="graph", path=Path(""), batch_size=req.k)
+    job.log("Queued graph build job")
+    JOBS[job.id] = job
+    await QUEUE.put(("build_graph", req.dict(), job.id))
+    return {"job_id": job.id}
+
+
+@router.post("/graph_search")
+async def graph_search(req: GraphSearchReq):
+    s = get_store(req.store)
+
+    # 1) Get embeddings
+    model_id = s.meta["model"]
+    encoder = get_model(model_id)()
+    encoder.load()
+    v_start = encoder.embed([req.start]).astype(np.float32)
+    v_end = encoder.embed([req.end]).astype(np.float32)
+
+    G: nx.Graph
+    # 2) Ensure graph exists
+    print("Loading Grap...")
+    if not hasattr(s, "graph") or s.graph is None:
+        print("Graph not Found. Building graph...")
+        G = await s.build_graph()
+
+    else:
+        G = s.graph
+
+    print("Graph Loaded")
+
+    # 3) Find closest nodes in the graph for start and end
+    entries = s.get_all()
+    embs = s.index.reconstruct_n(0, len(entries))
+    dists_start = np.dot(embs, v_start.T).flatten()
+    dists_end = np.dot(embs, v_end.T).flatten()
+    start_node = int(np.argmax(dists_start))
+    end_node = int(np.argmax(dists_end))
+
+    # 4) Shortest path in the graph
+    print("Computing Shortest Path...")
+    path = nx.shortest_path(G, source=start_node, target=end_node, weight="weight")
+
+    # 5) Optionally truncate or interpolate path to req.k
+    if req.k and len(path) > req.k + 2:
+        # keep start + end, subsample intermediate nodes
+        step = max(1, len(path) // (req.k + 1))
+        path = path[::step]
+        if path[-1] != end_node:
+            path.append(end_node)
+
+    nodes = [{"id": entries[i]["id"], "text": entries[i]["text"]} for i in path]
+    return {"nodes": nodes, "distance": float(len(path))}

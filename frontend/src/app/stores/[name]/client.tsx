@@ -15,6 +15,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
+import { Label } from "@/components/ui/label";
 
 type Entry = { id: string; text: string };
 type Job = {
@@ -42,6 +43,12 @@ export default function StoreClient({ store, initialEntries }: { store: string; 
 
   const [jobs, setJobs] = useState<Record<string, Job>>({});
   const [deleteOpen, setDeleteOpen] = useState(false);
+
+  // extra params for graph build
+  const [graphK, setGraphK] = useState(5);
+  const [graphM, setGraphM] = useState(16);
+  const [graphEfC, setGraphEfC] = useState(100);
+  const [buildingGraph, setBuildingGraph] = useState(false);
 
   // WebSocket jobs API
   useEffect(() => {
@@ -133,6 +140,21 @@ export default function StoreClient({ store, initialEntries }: { store: string; 
       alert("Failed to delete store.");
     } finally {
       setDeleteOpen(false);
+    }
+  };
+
+  const buildGraph = async () => {
+    setBuildingGraph(true);
+    try {
+      const res = await api<{ job_id: string }>("/stores/build_graph", {
+        method: "POST",
+        body: JSON.stringify({ store, k: graphK, M: graphM, efConstruction: graphEfC }),
+      });
+      console.log("Graph build job launched:", res.job_id);
+    } catch (err) {
+      alert("Graph build failed");
+    } finally {
+      setBuildingGraph(false);
     }
   };
 
@@ -241,24 +263,75 @@ export default function StoreClient({ store, initialEntries }: { store: string; 
             {loadingAdd ? "Adding…" : "Add Text"}
           </Button>
 
-          <div className="flex gap-2 items-center">
+          <div className="flex gap-2 items-end">
             <Input
               type="file"
-              accept=".txt"
+              accept=".txt,.csv,.tsv"
               onChange={(e) => setFile(e.target.files?.[0] || null)}
               className="flex-1"
             />
-            <Input
-              type="number"
-              min={1}
-              value={batchSize}
-              onChange={(e) => setBatchSize(Number(e.target.value))}
-              className="w-24"
-            />
+            <div className="flex flex-col gap-2">
+              <Label>Batch Size</Label>
+              <Input
+                type="number"
+                min={1}
+                value={batchSize}
+                onChange={(e) => setBatchSize(Number(e.target.value))}
+                className="w-24"
+              />
+            </div>
             <Button onClick={uploadFile} disabled={!file}>
               Upload
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Build Graph */}
+      <Card>
+        <CardHeader><CardTitle>Build Graph</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2 items-end">
+            <div className="flex flex-col gap-2">
+              <Label>K</Label>
+              <Input
+                type="number"
+                min={1}
+                value={graphK}
+                onChange={(e) => setGraphK(Number(e.target.value))}
+                className="w-24"
+                placeholder="k"
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>M</Label>
+              <Input
+                type="number"
+                min={1}
+                value={graphM}
+                onChange={(e) => setGraphM(Number(e.target.value))}
+                className="w-24"
+                placeholder="M"
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>efConstruction</Label>
+              <Input
+                type="number"
+                min={1}
+                value={graphEfC}
+                onChange={(e) => setGraphEfC(Number(e.target.value))}
+                className="w-32"
+                placeholder="efConstruction"
+              />
+            </div>
+            <Button onClick={buildGraph} disabled={buildingGraph}>
+              {buildingGraph ? "Building…" : "Build Graph"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This will construct a k-NN graph (HNSW) and save it as <code>graph.faiss</code>.
+          </p>
         </CardContent>
       </Card>
 
